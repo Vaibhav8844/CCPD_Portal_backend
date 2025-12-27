@@ -1,6 +1,6 @@
 import express from "express";
 import { authenticate } from "../auth/auth.middleware.js";
-import { roleGuard } from "../middleware/roleGuard.js";
+import roleGuard from "../middleware/roleGuard.js";
 import { getSheet } from "../sheets/sheets.client.js";
 
 const router = express.Router();

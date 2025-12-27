@@ -1,6 +1,6 @@
 import express from "express";
 import { authenticate } from "../auth/auth.middleware.js";
-import { roleGuard } from "../middleware/roleGuard.js";
+import roleGuard from "../middleware/roleGuard.js";
 import { appendRow, getSheet } from "../sheets/sheets.client.js";
 
 const router = express.Router();
@@ -10,15 +10,14 @@ router.get(
   authenticate,
   roleGuard("SPOC", "CALENDAR_TEAM", "ADMIN"),
   async (req, res) => {
-    const email = req.user.email;
-
+    const username = req.user.username.toLowerCase().trim();
     const rows = await getSheet("Company_SPOC_Map");
 
     const companies = rows
-      .slice(1)
-      .filter(r => r[1]?.trim() === email)
-      .map(r => r[0]);
-    console.log("Logged SPOC:", email);
+      .filter((r, i) => i > 0 && r[1])
+      .filter(r => r[1].toLowerCase().trim() === username)
+      .map(r => r[0]?.trim());
+
     res.json({ companies });
   }
 );

@@ -4,18 +4,18 @@ const ROLE_HIERARCHY = {
   ADMIN: ["ADMIN"],
 };
 
-export  const roleGuard = (...allowedRoles) => {
+export default function roleGuard(...allowedRoles) {
   return (req, res, next) => {
-    const userRole = req.user.role;
+    if (!req.user) {
+      return res.status(401).json({ message: "Unauthenticated" });
+    }
 
-    const allowed = allowedRoles.some(role =>
-      ROLE_HIERARCHY[role]?.includes(userRole)
-    );
-
-    if (!allowed) {
-      return res.status(403).json({ message: "Forbidden" });
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({
+        message: "Access denied for role: " + req.user.role,
+      });
     }
 
     next();
   };
-};
+}

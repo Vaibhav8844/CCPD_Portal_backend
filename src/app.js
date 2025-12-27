@@ -2,10 +2,10 @@ import express from "express";
 import cors from "cors";
 import dotenv from "dotenv";
 
-import authRoutes from "./auth/auth.controller.js";
+import authRoutes from "./auth/auth.routes.js";
 import companyRoutes from "./companies/company.controller.js";
 import driveRoutes from "./drives/drive.controller.js";
-import placementRoutes from "./placements/placement.controller.js";
+import placementRoutes from "./placements/placement.routes.js";
 import userRoutes from "./users/user.controller.js";
 
 dotenv.config();

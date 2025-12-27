@@ -1,19 +1,35 @@
-import express from "express";
-import { authenticate } from "../auth/auth.middleware.js";
-import { roleGuard } from "../middleware/roleGuard.js";
-import { appendRow } from "../sheets/sheets.client.js";
+// src/placements/placement.controller.js
+import { getSheet } from "../sheets/sheets.client.js";
+import { idxOf } from "../utils/sheetUtils.js";
 
-const router = express.Router();
+export async function getCalendarData(req, res) {
+  const rows = await getSheet("Company_Drives");
+  const header = rows[0];
 
-router.post(
-  "/submit",
-  authenticate,
-  roleGuard("SPOC"),
-  async (req, res) => {
-    const { company, roll } = req.body;
-    await appendRow("Placement_Results", [company, roll]);
-    res.json({ success: true });
-  }
-);
+  const idx = {
+    company: idxOf(header, "Company"),
+    spoc: idxOf(header, "SPOC"),
+    eligible: idxOf(header, "Eligible Pool"),
+    ctc: idxOf(header, "FTE CTC"),
+    base: idxOf(header, "FTE Base"),
+    hires: idxOf(header, "Expected Hires"),
+    ppt: idxOf(header, "PPT Datetime"),
+    ot: idxOf(header, "OT Datetime"),
+    interview: idxOf(header, "Interview Datetime"),
+  };
 
-export default router;
+  const data = rows.slice(1).map((r) => ({
+    company: r[idx.company],
+    spoc: r[idx.spoc],
+    eligible_pool: r[idx.eligible],
+    fte_ctc: r[idx.ctc],
+    fte_base: r[idx.base],
+    expected_hires: r[idx.hires],
+    ppt: r[idx.ppt],
+    ot: r[idx.ot],
+    interview: r[idx.interview],
+  }));
+
+  res.json({ data });
+}
+

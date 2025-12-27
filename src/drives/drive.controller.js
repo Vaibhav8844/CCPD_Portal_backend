@@ -1,13 +1,19 @@
 import express from "express";
 import { authenticate } from "../auth/auth.middleware.js";
-import { roleGuard } from "../middleware/roleGuard.js";
-import { getSheet, appendRow, updateCell,updateRow } from "../sheets/sheets.client.js";
+import roleGuard from "../middleware/roleGuard.js";
+import {
+  getSheet,
+  appendRow,
+  updateCell,
+  updateRow,
+} from "../sheets/sheets.client.js";
 import { idxOf } from "../utils/sheetUtils.js";
 import { ensureHeaders } from "../utils/sheetBootstrap.js";
 import {
   DRIVE_REQUEST_HEADERS,
   COMPANY_DRIVES_HEADERS,
 } from "../constants/sheets.js";
+import { upsertCompanyDrivesEntry } from "../drives/calendarUtils.js";
 
 import crypto from "crypto";
 
@@ -28,174 +34,170 @@ function getColumnMap(header) {
 /**
  * SPOC submits request
  */
-router.post(
-  "/request",
-  authenticate,
-  roleGuard("SPOC"),
-  async (req, res) => {
-    let {
-      request_id,
-      company,
-      type,
-      eligible_pool,
-      cgpa_cutoff,
-      ppt_datetime,
-      ot_datetime,
-      interview_datetime,
-      internship_stipend,
-      fte_ctc,
-      fte_base,
-      expected_hires,
-    } = req.body;
+router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
+  const spoc = req.user.username;
+  let {
+    request_id,
+    company,
+    type,
+    eligible_pool,
+    cgpa_cutoff,
+    ppt_datetime,
+    ot_datetime,
+    interview_datetime,
+    internship_stipend,
+    fte_ctc,
+    fte_base,
+    expected_hires,
+  } = req.body;
 
-    const rows = await getSheet("Drive_Requests");
-    const header = rows[0];
+  const rows = await getSheet("Drive_Requests");
+  const header = rows[0];
 
-    const idx = {
-      request_id: idxOf(header, "Request ID"),
-      company: idxOf(header, "Company"),
-      type: idxOf(header, "Type"),
-      eligible_pool: idxOf(header, "Eligible Pool"),
-      cgpa: idxOf(header, "CGPA Cutoff"),
+  const idx = {
+    request_id: idxOf(header, "Request ID"),
+    company: idxOf(header, "Company"),
+    spoc: idxOf(header, "SPOC"),
+    type: idxOf(header, "Type"),
+    eligible_pool: idxOf(header, "Eligible Pool"),
+    cgpa: idxOf(header, "CGPA Cutoff"),
 
-      ppt_dt: idxOf(header, "PPT Datetime"),
-      ot_dt: idxOf(header, "OT Datetime"),
-      interview_dt: idxOf(header, "Interview Datetime"),
+    ppt_dt: idxOf(header, "PPT Datetime"),
+    ot_dt: idxOf(header, "OT Datetime"),
+    interview_dt: idxOf(header, "Interview Datetime"),
 
-      ppt_status: idxOf(header, "PPT Status"),
-      ot_status: idxOf(header, "OT Status"),
-      interview_status: idxOf(header, "INTERVIEW Status"),
+    ppt_status: idxOf(header, "PPT Status"),
+    ot_status: idxOf(header, "OT Status"),
+    interview_status: idxOf(header, "INTERVIEW Status"),
 
-      stipend: idxOf(header, "Internship Stipend"),
-      fte_ctc: idxOf(header, "FTE CTC"),
-      fte_base: idxOf(header, "FTE Base"),
-      hires: idxOf(header, "Expected Hires"),
-      drive_status: idxOf(header, "Drive Status"),
-    };
+    stipend: idxOf(header, "Internship Stipend"),
+    fte_ctc: idxOf(header, "FTE CTC"),
+    fte_base: idxOf(header, "FTE Base"),
+    hires: idxOf(header, "Expected Hires"),
+    drive_status: idxOf(header, "Drive Status"),
+  };
 
-    /* ---------- FIND BY request_id ONLY ---------- */
-    let rowIndex = -1;
-    if (request_id) {
-      rowIndex = rows.findIndex(
-        (r, i) => i > 0 && r[idx.request_id] === request_id
-      );
+  /* ---------- FIND BY request_id ONLY ---------- */
+  let rowIndex = -1;
+  if (request_id) {
+    rowIndex = rows.findIndex(
+      (r, i) => i > 0 && r[idx.request_id] === request_id
+    );
+  }
+
+  /* ---------- CREATE (ONLY ONCE) ---------- */
+  if (!request_id || rowIndex === -1) {
+    request_id = crypto.randomUUID();
+
+    const newRow = Array(header.length).fill("");
+
+    newRow[idx.request_id] = request_id;
+    newRow[idx.company] = company;
+    newRow[idx.spoc] = spoc;
+    newRow[idx.type] = type;
+    newRow[idx.eligible_pool] = eligible_pool;
+    newRow[idx.cgpa] = cgpa_cutoff;
+    newRow[idx.stipend] = internship_stipend;
+    newRow[idx.fte_ctc] = fte_ctc;
+    newRow[idx.fte_base] = fte_base;
+    newRow[idx.hires] = expected_hires;
+    newRow[idx.drive_status] = "Scheduled";
+
+    if (hasValue(ppt_datetime)) {
+      newRow[idx.ppt_dt] = ppt_datetime;
+      newRow[idx.ppt_status] = "PENDING";
     }
 
-    /* ---------- CREATE (ONLY ONCE) ---------- */
-    if (!request_id || rowIndex === -1) {
-      request_id = crypto.randomUUID();
-
-      const newRow = Array(header.length).fill("");
-
-      newRow[idx.request_id] = request_id;
-      newRow[idx.company] = company;
-      newRow[idx.type] = type;
-      newRow[idx.eligible_pool] = eligible_pool;
-      newRow[idx.cgpa] = cgpa_cutoff;
-      newRow[idx.stipend] = internship_stipend;
-      newRow[idx.fte_ctc] = fte_ctc;
-      newRow[idx.fte_base] = fte_base;
-      newRow[idx.hires] = expected_hires;
-      newRow[idx.drive_status] = "Scheduled";
-
-      if (hasValue(ppt_datetime)) {
-        newRow[idx.ppt_dt] = ppt_datetime;
-        newRow[idx.ppt_status] = "PENDING";
-      }
-
-      if (hasValue(ot_datetime)) {
-        newRow[idx.ot_dt] = ot_datetime;
-        newRow[idx.ot_status] = "PENDING";
-      }
-
-      if (hasValue(interview_datetime)) {
-        newRow[idx.interview_dt] = interview_datetime;
-        newRow[idx.interview_status] = "PENDING";
-      }
-
-      await appendRow("Drive_Requests", newRow);
-      return res.json({ request_id });
+    if (hasValue(ot_datetime)) {
+      newRow[idx.ot_dt] = ot_datetime;
+      newRow[idx.ot_status] = "PENDING";
     }
 
-    /* ---------- UPDATE EXISTING ---------- */
-    const row = rowIndex + 1;
-
-    // ---- NON-DATE FIELDS ----
-    const baseUpdates = [
-      [idx.type, type],
-      [idx.eligible_pool, eligible_pool],
-      [idx.cgpa, cgpa_cutoff],
-      [idx.stipend, internship_stipend],
-      [idx.fte_ctc, fte_ctc],
-      [idx.fte_base, fte_base],
-      [idx.hires, expected_hires],
-    ];
-
-    for (const [col, val] of baseUpdates) {
-      if (hasValue(val)) {
-        await updateCell("Drive_Requests", row, col, val);
-      }
+    if (hasValue(interview_datetime)) {
+      newRow[idx.interview_dt] = interview_datetime;
+      newRow[idx.interview_status] = "PENDING";
     }
 
-    /* ----------------------------------------------------
+    await appendRow("Drive_Requests", newRow);
+    return res.json({ request_id });
+  }
+
+  /* ---------- UPDATE EXISTING ---------- */
+  const row = rowIndex + 1;
+
+  // ---- NON-DATE FIELDS ----
+  const baseUpdates = [
+    [idx.type, type],
+    [idx.eligible_pool, eligible_pool],
+    [idx.cgpa, cgpa_cutoff],
+    [idx.stipend, internship_stipend],
+    [idx.fte_ctc, fte_ctc],
+    [idx.fte_base, fte_base],
+    [idx.hires, expected_hires],
+  ];
+
+  for (const [col, val] of baseUpdates) {
+    if (hasValue(val)) {
+      await updateCell("Drive_Requests", row, col, val);
+    }
+  }
+
+  /* ----------------------------------------------------
        🔥 FIXED STATUS LOGIC (MOST IMPORTANT PART)
        Status resets ONLY if date actually changes
     ---------------------------------------------------- */
 
-    // ---- PPT ----
-    if (hasValue(ppt_datetime)) {
-      const prevDate = rows[rowIndex][idx.ppt_dt];
-      const prevStatus = rows[rowIndex][idx.ppt_status];
+  // ---- PPT ----
+  if (hasValue(ppt_datetime)) {
+    const prevDate = rows[rowIndex][idx.ppt_dt];
+    const prevStatus = rows[rowIndex][idx.ppt_status];
 
-      if (ppt_datetime !== prevDate) {
-        await updateCell("Drive_Requests", row, idx.ppt_dt, ppt_datetime);
-        if (prevStatus !== "APPROVED") {
-          await updateCell("Drive_Requests", row, idx.ppt_status, "PENDING");
-        }
+    if (ppt_datetime !== prevDate) {
+      await updateCell("Drive_Requests", row, idx.ppt_dt, ppt_datetime);
+      if (prevStatus !== "APPROVED") {
+        await updateCell("Drive_Requests", row, idx.ppt_status, "PENDING");
       }
     }
+  }
 
-    // ---- OT ----
-    if (hasValue(ot_datetime)) {
-      const prevDate = rows[rowIndex][idx.ot_dt];
-      const prevStatus = rows[rowIndex][idx.ot_status];
+  // ---- OT ----
+  if (hasValue(ot_datetime)) {
+    const prevDate = rows[rowIndex][idx.ot_dt];
+    const prevStatus = rows[rowIndex][idx.ot_status];
 
-      if (ot_datetime !== prevDate) {
-        await updateCell("Drive_Requests", row, idx.ot_dt, ot_datetime);
-        if (prevStatus !== "APPROVED") {
-          await updateCell("Drive_Requests", row, idx.ot_status, "PENDING");
-        }
+    if (ot_datetime !== prevDate) {
+      await updateCell("Drive_Requests", row, idx.ot_dt, ot_datetime);
+      if (prevStatus !== "APPROVED") {
+        await updateCell("Drive_Requests", row, idx.ot_status, "PENDING");
       }
     }
+  }
 
-    // ---- INTERVIEW ----
-    if (hasValue(interview_datetime)) {
-      const prevDate = rows[rowIndex][idx.interview_dt];
-      const prevStatus = rows[rowIndex][idx.interview_status];
+  // ---- INTERVIEW ----
+  if (hasValue(interview_datetime)) {
+    const prevDate = rows[rowIndex][idx.interview_dt];
+    const prevStatus = rows[rowIndex][idx.interview_status];
 
-      if (interview_datetime !== prevDate) {
+    if (interview_datetime !== prevDate) {
+      await updateCell(
+        "Drive_Requests",
+        row,
+        idx.interview_dt,
+        interview_datetime
+      );
+      if (prevStatus !== "APPROVED") {
         await updateCell(
           "Drive_Requests",
           row,
-          idx.interview_dt,
-          interview_datetime
+          idx.interview_status,
+          "PENDING"
         );
-        if (prevStatus !== "APPROVED") {
-          await updateCell(
-            "Drive_Requests",
-            row,
-            idx.interview_status,
-            "PENDING"
-          );
-        }
       }
     }
-
-    res.json({ request_id });
   }
-);
 
-
+  res.json({ request_id });
+});
 
 /**
  * Calendar team views pending approvals
@@ -219,10 +221,7 @@ router.get(
         (r) =>
           isPending(r[idx("PPT Datetime")], r[idx("PPT Status")]) ||
           isPending(r[idx("OT Datetime")], r[idx("OT Status")]) ||
-          isPending(
-            r[idx("Interview Datetime")],
-            r[idx("INTERVIEW Status")]
-          )
+          isPending(r[idx("Interview Datetime")], r[idx("INTERVIEW Status")])
       )
       .map((r) => ({
         request_id: r[idx("Request ID")],
@@ -239,7 +238,6 @@ router.get(
   }
 );
 
-
 /**
  * Calendar team approves ONE slot
  */
@@ -252,34 +250,61 @@ router.post(
 
     const rows = await getSheet("Drive_Requests");
     const header = rows[0];
-    const idx = (c) => idxOf(header, c);
+    const col = (name) => idxOf(header, name);
 
     const rowIndex = rows.findIndex(
-      (r, i) => i > 0 && r[idx("Request ID")] === request_id
+      (r, i) => i > 0 && r[col("Request ID")] === request_id
     );
 
     if (rowIndex === -1) {
       return res.status(404).json({ message: "Request not found" });
     }
 
+    const sheetRow = rows[rowIndex];
     const row = rowIndex + 1;
-    const statusCol = `${slot} Status`;
-    const suggestCol = `${slot} Suggested Datetime`;
 
+    const company = sheetRow[col("Company")];
+    const spoc = sheetRow[col("SPOC")];
+
+    const dateColumnMap = {
+      PPT: "PPT Datetime",
+      OT: "OT Datetime",
+      INTERVIEW: "Interview Datetime",
+    };
+
+    const statusColumn = `${slot} Status`;
+    const suggestColumn = `${slot} Suggested Datetime`;
+
+    /* ================= APPROVE ================= */
     if (action === "APPROVE") {
-      await updateCell("Drive_Requests", row, idx(statusCol), "APPROVED");
+      const dateCol = dateColumnMap[slot];
+      const approvedDate = sheetRow[col(dateCol)];
+
+      if (approvedDate) {
+        await upsertCompanyDrivesEntry({
+          requestId: request_id,
+          slot,
+          sheetRow,
+          header,
+        });
+      }
+
+      await updateCell("Drive_Requests", row, col(statusColumn), "APPROVED");
     }
 
+    /* ================= REJECT ================= */
     if (action === "REJECT") {
-      await updateCell("Drive_Requests", row, idx(statusCol), "REJECTED");
+      await updateCell("Drive_Requests", row, col(statusColumn), "REJECTED");
     }
 
+    /* ================= SUGGEST ================= */
     if (action === "SUGGEST") {
-      await updateCell("Drive_Requests", row, idx(statusCol), "SUGGESTED");
+      await updateCell("Drive_Requests", row, col(statusColumn), "SUGGESTED");
+
       await updateCell(
         "Drive_Requests",
         row,
-        idx(suggestCol),
+        col(suggestColumn),
         suggested_datetime
       );
     }
@@ -287,7 +312,6 @@ router.post(
     res.json({ success: true });
   }
 );
-
 
 router.get(
   "/my",
