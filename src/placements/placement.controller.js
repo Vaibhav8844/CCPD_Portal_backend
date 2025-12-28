@@ -1,6 +1,7 @@
 // src/placements/placement.controller.js
 import { getSheet } from "../sheets/sheets.client.js";
 import { idxOf } from "../utils/sheetUtils.js";
+import { ensurePlacementSheets } from "../utils/placementWorkbook.js";
 
 export async function getCalendarData(req, res) {
   const rows = await getSheet("Company_Drives");
@@ -33,3 +34,40 @@ export async function getCalendarData(req, res) {
   res.json({ data });
 }
 
+export async function enrollBatch(req, res) {
+  const { year, program, branches } = req.body;
+
+  if (!year || !program || !Array.isArray(branches) || branches.length === 0) {
+    return res.status(400).json({
+      message: "Year, program and at least one branch are required",
+    });
+  }
+
+  try {
+    const results = [];
+
+    for (const branch of branches) {
+      const result = await ensurePlacementSheets({
+        year,
+        program,
+        branch,
+      });
+
+      results.push({
+        branch,
+        workbook: result.workbookName,
+      });
+    }
+
+    res.json({
+      success: true,
+      message: "Batch enrolled successfully",
+      data: results,
+    });
+  } catch (err) {
+    console.error("Enroll batch failed:", err);
+    res.status(500).json({
+      message: "Failed to enroll batch",
+    });
+  }
+}

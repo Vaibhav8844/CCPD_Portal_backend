@@ -8,7 +8,7 @@ const router = express.Router();
 router.get(
   "/my",
   authenticate,
-  roleGuard("SPOC", "CALENDAR_TEAM", "ADMIN"),
+  roleGuard("SPOC", "CALENDAR_TEAM", "DATA_TEAM", "ADMIN"),
   async (req, res) => {
     const username = req.user.username.toLowerCase().trim();
     const rows = await getSheet("Company_SPOC_Map");

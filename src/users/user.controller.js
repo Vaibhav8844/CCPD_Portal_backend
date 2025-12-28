@@ -6,8 +6,9 @@ import { getSheet } from "../sheets/sheets.client.js";
 const router = express.Router();
 
 const ROLE_HIERARCHY = {
-  SPOC: ["SPOC", "CALENDAR_TEAM", "ADMIN"],
+  SPOC: ["SPOC", "CALENDAR_TEAM","DATA_TEAM", "ADMIN"],
   CALENDAR_TEAM: ["CALENDAR_TEAM", "ADMIN"],
+  DATA_TEAM: ["DATA_TEAM", "ADMIN"],
   ADMIN: ["ADMIN"],
 };
 
@@ -17,7 +18,7 @@ const ROLE_HIERARCHY = {
 router.get(
   "/spocs",
   authenticate,
-  roleGuard("CALENDAR_TEAM", "ADMIN"),
+  roleGuard("CALENDAR_TEAM", "ADMIN", "DATA_TEAM"),
   async (req, res) => {
     const query = (req.query.q || "").toLowerCase();
 

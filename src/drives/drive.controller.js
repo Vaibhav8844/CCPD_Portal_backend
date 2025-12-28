@@ -316,7 +316,7 @@ router.post(
 router.get(
   "/my",
   authenticate,
-  roleGuard("SPOC", "CALENDAR_TEAM", "ADMIN"),
+  roleGuard("SPOC", "CALENDAR_TEAM", "DATA_TEAM", "ADMIN"),
   async (req, res) => {
     const rows = await getSheet("Drive_Requests");
     const header = rows[0];

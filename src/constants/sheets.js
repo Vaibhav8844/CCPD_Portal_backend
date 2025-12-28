@@ -42,3 +42,54 @@ export const COMPANY_DRIVES_HEADERS = [
   "Results Published At",
   "Last Updated",
 ];
+
+export const SHEET_TEMPLATES = {
+  students: [
+    "Roll No",
+    "Name",
+    "Gender",
+    "Branch",
+    "CGPA",
+    "Eligible",
+    "Placement Status",
+    "Placement Type",
+    "Company",
+    "Highest CTC",
+    "Offer Revoked",
+  ],
+
+  offers: [
+    "Roll No",
+    "Company",
+    "Offer Type",
+    "CTC (LPA)",
+    "Offer Status",
+  ],
+
+  companyDrives: [
+    "Company",
+    "SPOC",
+    "Request ID",
+    "Drive Type",
+    "Eligible Pool",
+    "PPT Datetime",
+    "OT Datetime",
+    "Interview Datetime",
+    "PPT Status",
+    "OT Status",
+    "INTERVIEW Status",
+    "Internship Stipend",
+    "FTE CTC",
+    "FTE Base",
+    "Expected Hires",
+    "Actual Hires",
+    "Drive Status",
+    "Results Published",
+    "Results Published At",
+    "Last Updated",
+  ],
+
+  placementStats: ["Metric", "Value"],
+
+  ctcDistribution: ["CTC Threshold", "Number of Students"],
+};

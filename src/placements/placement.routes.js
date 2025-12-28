@@ -1,6 +1,7 @@
 import express from "express";
 import { getCalendarData } from "./placement.controller.js";
 import { authenticate } from "../auth/auth.middleware.js";
+import { enrollBatch } from "./placement.controller.js";
 import roleGuard from "../middleware/roleGuard.js";
 
 const router = express.Router();
@@ -21,6 +22,13 @@ router.get(
   authenticate,
   roleGuard("CALENDAR_TEAM", "ADMIN"),
   getCalendarData
+);
+
+router.post(
+  "/enroll-batch",
+  authenticate,
+  roleGuard("DATA_TEAM", "ADMIN"),
+  enrollBatch
 );
 
 export default router;

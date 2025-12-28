@@ -22,4 +22,11 @@ export const users = [
     passwordHash: bcrypt.hashSync("spoc123", 10),
     role: "SPOC",
   },
+  {
+    id: "4",
+    name: "Data Team",
+    username: "data@ccpd.edu",
+    passwordHash: bcrypt.hashSync("data123", 10),
+    role: "DATA_TEAM",
+  },
 ];
