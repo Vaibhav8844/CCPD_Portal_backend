@@ -1,6 +1,9 @@
 import bcrypt from "bcryptjs";
+import fs from "fs";
+import path from "path";
 
-export const users = [
+// Default/seed users (always available)
+const defaultUsers = [
   {
     id: "1",
     name: "Admin User",
@@ -37,3 +40,42 @@ export const users = [
     role: "CALENDAR_TEAM",
   },
 ];
+
+// Path to persistent users file
+const usersFile = path.resolve(process.cwd(), "data", "registered_users.json");
+
+// Load registered users from file
+function loadRegisteredUsers() {
+  try {
+    if (fs.existsSync(usersFile)) {
+      return JSON.parse(fs.readFileSync(usersFile, "utf-8"));
+    }
+  } catch (err) {
+    console.error("[users] Failed to load registered users:", err);
+  }
+  return [];
+}
+
+// Save registered users to file
+export function saveUsers(registeredUsers) {
+  try {
+    const dir = path.dirname(usersFile);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    fs.writeFileSync(usersFile, JSON.stringify(registeredUsers, null, 2));
+    console.log("[users] Saved registered users to file");
+  } catch (err) {
+    console.error("[users] Failed to save users:", err);
+    throw err;
+  }
+}
+
+// Get only registered users (for saving)
+export function getRegisteredUsers() {
+  return users.filter((u) => !defaultUsers.find((du) => du.id === u.id));
+}
+
+// Merge default users with registered users
+const registeredUsers = loadRegisteredUsers();
+export let users = [...defaultUsers, ...registeredUsers];

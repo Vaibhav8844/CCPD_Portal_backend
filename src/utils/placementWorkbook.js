@@ -2,6 +2,16 @@ import { getSheets, getDrive } from "../sheets/sheets.dynamic.js";
 import { SHEET_TEMPLATES } from "../constants/sheets.js";
 import { getAcademicYear } from "../config/academicYear.js";
 
+/**
+ * Normalize branch code to 2 letters (CS, EC, EE, ME)
+ */
+function normalizeBranchCode(branch) {
+  const code = String(branch || "").toUpperCase().trim();
+  if (code.length === 2) return code;
+  if (code.length === 3) return code.slice(0, 2);
+  return code;
+}
+
 export async function ensurePlacementSheets({ program, branch }) {
   const sheets = await getSheets();
   const drive = await getDrive();
@@ -9,7 +19,7 @@ export async function ensurePlacementSheets({ program, branch }) {
   // Use academic year from config
   const academicYear = getAcademicYear();
   const workbookName = `Placement_Data_${academicYear}_${program}`;
-  const branchCode = String(branch || "").toUpperCase();
+  const branchCode = normalizeBranchCode(branch);
 
   const spreadsheetId = await getOrCreateWorkbook(drive, workbookName);
 

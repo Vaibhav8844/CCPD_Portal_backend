@@ -35,7 +35,7 @@ app.use("/drives", driveRoutes);
 app.use("/academic-year", academicYearRoutes);
 app.use("/placements", placementRoutes);
 app.use("/users", userRoutes);
-app.use("/api/analytics", analyticsRoutes);
+app.use("/analytics", analyticsRoutes);
 app.use("/data/enroll", enrollStudentsRoutes);
 app.use("/calendar", calendarRoutes);
 

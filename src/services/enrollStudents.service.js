@@ -1,10 +1,6 @@
 import { parseStudentsExcel } from "../utils/parseStudentsExcel.js";
-import {
-  getOrCreateStudentWorkbook,
-  ensureBranchSheet,
-  appendStudents,
-} from "../utils/studentWorkbook.js";
 import { getAcademicYear } from "../config/academicYear.js";
+import { populatePlacementStudentsSheet } from "../analytics/populatePlacementSheets.js";
 
 export async function enrollStudents({
   fileBuffer,
@@ -13,33 +9,20 @@ export async function enrollStudents({
   program,
 }) {
   const records = parseStudentsExcel(fileBuffer);
-
-  // Always use admin-set academic year for file naming
   const academicYear = getAcademicYear();
 
-  const spreadsheetId = await getOrCreateStudentWorkbook(academicYear, degreeType);
-  await ensureBranchSheet(spreadsheetId, branch);
-
-  const rows = records.map((r) => [
-    r["Roll No."] || "",
-    r["Student Name"] || "",
-    r["Gender"] || "",
-    r["Phone No."] || "",
-    r["Institute Email"] || "",
-    r["Personal Email"] || "",
-    branch,
+  // Populate placement workbook Students_<branch> sheet directly
+  const result = await populatePlacementStudentsSheet({
+    academicYear,
     degreeType,
-    program,
-    r["CGPA"] || "",
-    r["Session"] || "",
-    r["Semester/Quarter"] || "",
-  ]);
-
-  await appendStudents(spreadsheetId, branch, rows);
+    branch,
+    students: records,
+  });
 
   return {
-    inserted: rows.length,
-    workbook: `${degreeType}_Students_${academicYear}`,
-    sheet: branch,
+    inserted: result.added,
+    duplicates: result.skipped,
+    workbook: `Placement_Data_${academicYear}_${degreeType}`,
+    sheet: `Students_${branch}`,
   };
 }

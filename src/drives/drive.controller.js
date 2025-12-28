@@ -8,7 +8,6 @@ import {
   updateRow,
 } from "../sheets/sheets.client.js";
 import { getSheets } from "../sheets/sheets.dynamic.js";
-import { getOrCreateStudentWorkbook } from "../utils/studentWorkbook.js";
 import { ensurePlacementSheets } from "../utils/placementWorkbook.js";
 import { getAcademicYear } from "../config/academicYear.js";
 import { idxOf } from "../utils/sheetUtils.js";
@@ -17,7 +16,13 @@ import {
   DRIVE_REQUEST_HEADERS,
   COMPANY_DRIVES_HEADERS,
 } from "../constants/sheets.js";
-import { upsertCompanyDrivesEntry } from "../drives/calendarUtils.js";
+import { upsertCompanyDrivesEntry } from "./calendarUtils.js";
+import { updatePlacementWorkbook } from "../analytics/updatePlacementWorkbook.js";
+import { 
+  getPlacementResults, 
+  updatePlacementResults, 
+  revokeStudentOffer 
+} from "./placementResults.js";
 
 import crypto from "crypto";
 
@@ -480,16 +485,26 @@ router.post(
       });
     }
 
-    const rollNumbers = results
+    const newRollNumbers = results
       .split(",")
       .map((r) => r.trim())
       .filter(Boolean);
 
-    if (rollNumbers.length === 0) {
+    if (newRollNumbers.length === 0) {
       return res.status(400).json({ message: "No valid roll numbers" });
     }
 
-    console.log(`[publish][start] actor=${req.user?.username || "unknown"} request_id=${request_id} rolls=${rollNumbers.join(",")}`);
+    console.log(`[publish][start] actor=${req.user?.username || "unknown"} request_id=${request_id} rolls=${newRollNumbers.join(",")}`);
+
+    // ---------- GET PREVIOUS RESULTS ----------
+    const previousResults = await getPlacementResults(request_id);
+    const previousRollNumbers = previousResults.rollNumbers;
+
+    // Determine additions and removals
+    const addedRollNumbers = newRollNumbers.filter(r => !previousRollNumbers.includes(r));
+    const removedRollNumbers = previousRollNumbers.filter(r => !newRollNumbers.includes(r));
+
+    console.log(`[publish] Added: ${addedRollNumbers.length}, Removed: ${removedRollNumbers.length}`);
 
     // ---------- LOAD SHEETS ----------
     const driveRows = await getSheet("Drive_Requests");
@@ -504,11 +519,20 @@ router.post(
     const dIdx = {
       request_id: idxOf(dHeader, "Request ID"),
       company: idxOf(dHeader, "Company"),
+      spoc: idxOf(dHeader, "SPOC"),
       type: idxOf(dHeader, "Type"),
       eligible_pool: idxOf(dHeader, "Eligible Pool"),
+      cgpa_cutoff: idxOf(dHeader, "CGPA Cutoff"),
+      ppt_datetime: idxOf(dHeader, "PPT Datetime"),
+      ot_datetime: idxOf(dHeader, "OT Datetime"),
+      interview_datetime: idxOf(dHeader, "Interview Datetime"),
+      ppt_status: idxOf(dHeader, "PPT Status"),
+      ot_status: idxOf(dHeader, "OT Status"),
+      interview_status: idxOf(dHeader, "INTERVIEW Status"),
       internship_stipend: idxOf(dHeader, "Internship Stipend"),
       fte_ctc: idxOf(dHeader, "FTE CTC"),
       fte_base: idxOf(dHeader, "FTE Base"),
+      expected_hires: idxOf(dHeader, "Expected Hires"),
       drive_status: idxOf(dHeader, "Drive Status"),
     };
 
@@ -558,65 +582,50 @@ router.post(
       return { year, branchCode: (branchCode || "").toUpperCase(), degreeChar: (degreeChar || "").toUpperCase() };
     }
 
-    function findBranchSheetName(sheetsMeta, branchCode) {
-      const candidates = (sheetsMeta || []).map((s) => s.properties && s.properties.title).filter(Boolean);
-      const exact = candidates.find((t) => t.toLowerCase() === branchCode.toLowerCase());
-      if (exact) return exact;
-      const starts = candidates.find((t) => t.toLowerCase().startsWith(branchCode.toLowerCase()));
-      if (starts) return starts;
-      const inc = candidates.find((t) => t.toLowerCase().includes(branchCode.toLowerCase()));
-      if (inc) return inc;
-      return candidates.find((t) => t.toLowerCase().startsWith("students_")) || candidates[0];
-    }
-
-    for (const roll of rollNumbers) {
+    // ---------- PROCESS ADDED STUDENTS ----------
+    for (const roll of addedRollNumbers) {
       console.log(`[publish][roll] request_id=${request_id} roll=${roll} - parsing`);
       const parsed = parseRoll(roll);
       try {
         const degreeType = parsed.degreeChar === "M" ? "PG" : "UG";
-        // Use academic year from config for all placement workbooks
         const academicYear = getAcademicYear();
         console.log(`[publish][roll] ${roll} -> admission=${parsed.year} academic=${academicYear} branch=${parsed.branchCode} degree=${degreeType}`);
 
-        // For student workbook, use the first 4 digits of academicYear (e.g., 2025-26 -> 2025)
-        const studentYear = parseInt((academicYear || "2025").slice(0, 4), 10);
-        const studentWorkbookId = await getOrCreateStudentWorkbook(studentYear, degreeType);
-        console.log(`[publish][roll] ${roll} using studentWorkbookId=${studentWorkbookId}`);
-
+        // Get placement workbook (single source of truth)
+        const { spreadsheetId: placementId } = await ensurePlacementSheets({ program: degreeType, branch: parsed.branchCode });
         const sheetsApi = await getSheets();
-        const meta = await sheetsApi.spreadsheets.get({ spreadsheetId: studentWorkbookId });
-        const sheetName = findBranchSheetName(meta.data.sheets, parsed.branchCode);
-        console.log(`[publish][roll] ${roll} matched sheetName=${sheetName}`);
-        if (!sheetName) {
-          console.log(`[publish][roll][skip] ${roll} no branch sheet found`);
-          continue;
-        }
-
-        const studentsRange = `${sheetName}!A1:Z1000`;
-        const sres = await sheetsApi.spreadsheets.values.get({ spreadsheetId: studentWorkbookId, range: studentsRange });
+        
+        // Read from Students_<branch> sheet in placement workbook
+        const studentsSheetName = `Students_${parsed.branchCode}`;
+        const studentsRange = `${studentsSheetName}!A1:K1000`;
+        const sres = await sheetsApi.spreadsheets.values.get({ 
+          spreadsheetId: placementId, 
+          range: studentsRange 
+        });
+        
         const svals = sres.data.values || [];
-        console.log(`[publish][roll] ${roll} student rows found=${svals.length}`);
+        console.log(`[publish][roll] ${roll} reading from ${studentsSheetName}, found ${svals.length} rows`);
+        
         if (svals.length <= 1) {
-          console.log(`[publish][roll][skip] ${roll} no student rows in sheet`);
+          console.log(`[publish][roll][skip] ${roll} no students in ${studentsSheetName}`);
           continue;
         }
 
         const sheader = svals[0].map((h) => String(h || "").trim());
         const rollIdx = sheader.findIndex((h) => /roll/i.test(h));
         const nameIdx = sheader.findIndex((h) => /name/i.test(h));
-        const programIdx = sheader.findIndex((h) => /program|degree/i.test(h));
+        const branchIdx = sheader.findIndex((h) => /branch/i.test(h));
         const cgpaIdx = sheader.findIndex((h) => /cgpa/i.test(h));
 
         const studentRow = svals.slice(1).find((r) => (r[rollIdx] || "").toString().trim() === roll.toString().trim());
         if (!studentRow) {
-          console.log(`[publish][roll][skip] ${roll} student not found in sheet`);
+          console.log(`[publish][roll][skip] ${roll} student not found in ${studentsSheetName}`);
           continue;
         }
 
         const studentName = studentRow[nameIdx] || "";
-        const studentBranch = studentRow[programIdx] || parsed.branchCode;
+        const studentBranch = studentRow[branchIdx] || parsed.branchCode;
         const studentCgpa = studentRow[cgpaIdx] || "";
-        const program = studentRow[programIdx] || degreeType;
 
         console.log(`[publish][roll] ${roll} found student name=${studentName} branch=${studentBranch} cgpa=${studentCgpa}`);
 
@@ -643,25 +652,66 @@ router.post(
         }
 
         try {
-          const { spreadsheetId: placementId, workbookName } = await ensurePlacementSheets({ program, branch: parsed.branchCode });
-          const offersSheet = `Offers_${parsed.branchCode}`;
-          const offerRow = [roll, driveRow[dIdx.company], driveRow[dIdx.type], driveRow[dIdx.fte_ctc] || "", "SELECTED"];
-          const placementSheetsApi = await getSheets();
-          console.log(`[placement] Attempting to append offer for roll ${roll} to workbook '${workbookName}' (ID: ${placementId}), sheet '${offersSheet}'`);
-          await placementSheetsApi.spreadsheets.values.append({
-            spreadsheetId: placementId,
-            range: `${offersSheet}!A1`,
-            valueInputOption: "RAW",
-            requestBody: { values: [offerRow] },
+          // Update placement workbook directly (single source of truth)
+          await updatePlacementWorkbook({
+            rollNo: roll,
+            company: driveRow[dIdx.company],
+            branch: parsed.branchCode,
+            degreeType: degreeType,
+            ctc: parseFloat(driveRow[dIdx.fte_ctc]) || 0,
+            offerType: driveRow[dIdx.type] || "FTE",
+            requestId: request_id,
+            driveInfo: {
+              spoc: driveRow[dIdx.spoc],
+              driveType: driveRow[dIdx.type],
+              eligiblePool: driveRow[dIdx.eligible_pool],
+              pptDatetime: driveRow[dIdx.ppt_datetime],
+              otDatetime: driveRow[dIdx.ot_datetime],
+              interviewDatetime: driveRow[dIdx.interview_datetime],
+              pptStatus: driveRow[dIdx.ppt_status],
+              otStatus: driveRow[dIdx.ot_status],
+              interviewStatus: driveRow[dIdx.interview_status],
+              internshipStipend: driveRow[dIdx.internship_stipend],
+              fteCTC: driveRow[dIdx.fte_ctc],
+              fteBase: driveRow[dIdx.fte_base],
+              expectedHires: driveRow[dIdx.expected_hires],
+              driveStatus: driveRow[dIdx.drive_status],
+              resultsPublished: true,
+            },
           });
-          console.log(`[placement] Successfully appended offer for roll ${roll} to workbook '${workbookName}', sheet '${offersSheet}'`);
+          console.log(`[placement] Updated placement workbook for ${roll}`);
         } catch (err) {
-          console.warn(`[placement][error] Failed to append offer for roll ${roll}:`, err.message || err);
+          console.warn(`[placement][error] Failed to update placement for roll ${roll}:`, err.message || err);
         }
       } catch (err) {
         console.warn(`[publish][roll][error] Failed to process roll ${roll}:`, err.message || err);
       }
     }
+
+    // ---------- PROCESS REMOVED STUDENTS ----------
+    for (const roll of removedRollNumbers) {
+      console.log(`[publish][remove] Revoking offer for ${roll}`);
+      const parsed = parseRoll(roll);
+      const degreeType = parsed.degreeChar === "M" ? "PG" : "UG";
+      const academicYear = getAcademicYear();
+      
+      try {
+        // Get placement workbook
+        const { spreadsheetId: placementId } = await ensurePlacementSheets({ 
+          program: degreeType, 
+          branch: parsed.branchCode 
+        });
+        
+        // Revoke offer in Students sheet
+        await revokeStudentOffer(placementId, parsed.branchCode, roll);
+        console.log(`[publish][remove] Revoked offer for ${roll}`);
+      } catch (err) {
+        console.warn(`[publish][remove] Failed to revoke for ${roll}:`, err.message);
+      }
+    }
+
+    // ---------- UPDATE PLACEMENT_RESULTS SHEET ----------
+    await updatePlacementResults(request_id, driveRow[dIdx.company], newRollNumbers);
 
     // ---------- LOCK DRIVE ----------
     await updateCell(
@@ -674,7 +724,9 @@ router.post(
     res.json({
       success: true,
       company: driveRow[dIdx.company],
-      selected: rollNumbers.length,
+      selected: newRollNumbers.length,
+      added: addedRollNumbers.length,
+      removed: removedRollNumbers.length,
     });
   }
 );
@@ -686,25 +738,18 @@ router.get(
   async (req, res) => {
     const { request_id } = req.params;
 
-    const rows = await getSheet("Placement_Data");
-    const header = rows[0];
-
-    const idx = {
-      request_id: idxOf(header, "Request ID"),
-      roll: idxOf(header, "Roll Number"),
-      result: idxOf(header, "Result"),
-    };
-
-    const selectedRolls = rows
-      .slice(1)
-      .filter(
-        (r) => r[idx.request_id] === request_id && r[idx.result] === "SELECTED"
-      )
-      .map((r) => r[idx.roll]);
-
-    res.json({
-      results: selectedRolls.join(", "),
-    });
+    try {
+      const placementResults = await getPlacementResults(request_id);
+      
+      res.json({
+        results: placementResults.rollNumbers.join(", "),
+        rollNumbers: placementResults.rollNumbers,
+        count: placementResults.rollNumbers.length,
+      });
+    } catch (err) {
+      console.error("[results/:request_id] Error:", err);
+      res.status(500).json({ error: "Failed to fetch results" });
+    }
   }
 );
 
