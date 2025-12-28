@@ -12,6 +12,22 @@ export async function upsertCompanyDrivesEntry({
   const cdCol = (name) => idxOf(cdHeader, name);
   const drCol = (name) => idxOf(header, name);
 
+  // derive drive status based on approval columns and explicit drive_status
+  const deriveDriveStatus = () => {
+    const slotNames = ["PPT Status", "OT Status", "INTERVIEW Status"];
+    const vals = slotNames.map((n) => (sheetRow[drCol(n)] || "").toString().trim().toUpperCase());
+    const approvedCount = vals.filter((v) => v === "APPROVED").length;
+    const total = slotNames.length;
+
+    if (approvedCount === total) {
+      const explicit = (sheetRow[drCol("Drive Status")] || "").toString().trim();
+      return explicit && explicit.length ? explicit : "Scheduled";
+    }
+
+    if (approvedCount === 0) return "Approval Pending";
+    return "Partially Approved";
+  };
+
   // ---- sanity check (once) ----
   [
     "Company",
@@ -78,8 +94,7 @@ export async function upsertCompanyDrivesEntry({
     newRow[cdCol("Expected Hires")] =
       sheetRow[drCol("Expected Hires")] || "";
 
-    newRow[cdCol("Drive Status")] =
-      sheetRow[drCol("Drive Status")] || "Scheduled";
+    newRow[cdCol("Drive Status")] = deriveDriveStatus();
 
     // ---- slot-specific ----
     if (slot === "PPT") {
@@ -154,10 +169,14 @@ export async function upsertCompanyDrivesEntry({
     );
   }
 
-  await updateCell(
-    "Company_Drives",
-    row,
-    cdCol("Last Updated"),
-    now
-  );
+  // Always sync derived drive status and last-updated on any upsert
+  try {
+    const derived = deriveDriveStatus();
+    await updateCell("Company_Drives", row, cdCol("Drive Status"), derived);
+  } catch (err) {
+    // if Drive Status column missing, log and continue
+    console.warn("Failed to update Drive Status in Company_Drives:", err.message || err);
+  }
+
+  await updateCell("Company_Drives", row, cdCol("Last Updated"), now);
 }

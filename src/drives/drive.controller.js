@@ -7,6 +7,10 @@ import {
   updateCell,
   updateRow,
 } from "../sheets/sheets.client.js";
+import { getSheets } from "../sheets/sheets.dynamic.js";
+import { getOrCreateStudentWorkbook } from "../utils/studentWorkbook.js";
+import { ensurePlacementSheets } from "../utils/placementWorkbook.js";
+import { getAcademicYear } from "../config/academicYear.js";
 import { idxOf } from "../utils/sheetUtils.js";
 import { ensureHeaders } from "../utils/sheetBootstrap.js";
 import {
@@ -135,7 +139,7 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
     [idx.fte_base, fte_base],
     [idx.hires, expected_hires],
   ];
-
+  
   for (const [col, val] of baseUpdates) {
     if (hasValue(val)) {
       await updateCell("Drive_Requests", row, col, val);
@@ -177,7 +181,6 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
   if (hasValue(interview_datetime)) {
     const prevDate = rows[rowIndex][idx.interview_dt];
     const prevStatus = rows[rowIndex][idx.interview_status];
-
     if (interview_datetime !== prevDate) {
       await updateCell(
         "Drive_Requests",
@@ -445,6 +448,16 @@ router.post(
 
     await updateCell("Drive_Requests", rowIndex + 1, idx.drive_status, status);
 
+    // sync Company_Drives record to reflect the explicit drive status (and derived approval state)
+    try {
+      const rows = await getSheet("Drive_Requests");
+      const header = rows[0];
+      const sheetRow = rows[rowIndex];
+      await upsertCompanyDrivesEntry({ requestId: request_id, slot: null, sheetRow, header });
+    } catch (err) {
+      console.warn("Failed to sync Company_Drives after drive status change:", err.message || err);
+    }
+
     res.json({ success: true });
   }
 );
@@ -475,6 +488,8 @@ router.post(
     if (rollNumbers.length === 0) {
       return res.status(400).json({ message: "No valid roll numbers" });
     }
+
+    console.log(`[publish][start] actor=${req.user?.username || "unknown"} request_id=${request_id} rolls=${rollNumbers.join(",")}`);
 
     // ---------- LOAD SHEETS ----------
     const driveRows = await getSheet("Drive_Requests");
@@ -529,39 +544,123 @@ router.post(
       return res.status(404).json({ message: "Drive not found" });
     }
 
-    // ---------- BUILD STUDENT MAP ----------
-    const studentMap = {};
-    for (const r of studentRows.slice(1)) {
-      studentMap[r[sIdx.roll]] = r;
-    }
+    console.log(`[publish] loading drive/student/placement sheets`);
 
-    // ---------- APPEND RESULTS ----------
+    // ---------- APPEND RESULTS (per-roll lookup in per-year student workbook) ----------
     const now = new Date().toISOString();
 
+    function parseRoll(roll) {
+      const s = String(roll || "");
+      const yy = s.slice(0, 2);
+      const year = 2000 + Number(yy);
+      const branchCode = s.slice(2, 4);
+      const degreeChar = s.slice(6, 7) || s.slice(4, 5);
+      return { year, branchCode: (branchCode || "").toUpperCase(), degreeChar: (degreeChar || "").toUpperCase() };
+    }
+
+    function findBranchSheetName(sheetsMeta, branchCode) {
+      const candidates = (sheetsMeta || []).map((s) => s.properties && s.properties.title).filter(Boolean);
+      const exact = candidates.find((t) => t.toLowerCase() === branchCode.toLowerCase());
+      if (exact) return exact;
+      const starts = candidates.find((t) => t.toLowerCase().startsWith(branchCode.toLowerCase()));
+      if (starts) return starts;
+      const inc = candidates.find((t) => t.toLowerCase().includes(branchCode.toLowerCase()));
+      if (inc) return inc;
+      return candidates.find((t) => t.toLowerCase().startsWith("students_")) || candidates[0];
+    }
+
     for (const roll of rollNumbers) {
-      const student = studentMap[roll];
+      console.log(`[publish][roll] request_id=${request_id} roll=${roll} - parsing`);
+      const parsed = parseRoll(roll);
+      try {
+        const degreeType = parsed.degreeChar === "M" ? "PG" : "UG";
+        // Use academic year from config for all placement workbooks
+        const academicYear = getAcademicYear();
+        console.log(`[publish][roll] ${roll} -> admission=${parsed.year} academic=${academicYear} branch=${parsed.branchCode} degree=${degreeType}`);
 
-      if (!student) continue; // skip unknown roll numbers
+        // For student workbook, use the first 4 digits of academicYear (e.g., 2025-26 -> 2025)
+        const studentYear = parseInt((academicYear || "2025").slice(0, 4), 10);
+        const studentWorkbookId = await getOrCreateStudentWorkbook(studentYear, degreeType);
+        console.log(`[publish][roll] ${roll} using studentWorkbookId=${studentWorkbookId}`);
 
-      const row = Array(pHeader.length).fill("");
+        const sheetsApi = await getSheets();
+        const meta = await sheetsApi.spreadsheets.get({ spreadsheetId: studentWorkbookId });
+        const sheetName = findBranchSheetName(meta.data.sheets, parsed.branchCode);
+        console.log(`[publish][roll] ${roll} matched sheetName=${sheetName}`);
+        if (!sheetName) {
+          console.log(`[publish][roll][skip] ${roll} no branch sheet found`);
+          continue;
+        }
 
-      row[pIdx.request_id] = request_id;
-      row[pIdx.company] = driveRow[dIdx.company];
-      row[pIdx.drive_type] = driveRow[dIdx.type];
-      row[pIdx.eligible_pool] = driveRow[dIdx.eligible_pool];
-      row[pIdx.internship_stipend] = driveRow[dIdx.internship_stipend];
-      row[pIdx.fte_ctc] = driveRow[dIdx.fte_ctc];
-      row[pIdx.fte_base] = driveRow[dIdx.fte_base];
+        const studentsRange = `${sheetName}!A1:Z1000`;
+        const sres = await sheetsApi.spreadsheets.values.get({ spreadsheetId: studentWorkbookId, range: studentsRange });
+        const svals = sres.data.values || [];
+        console.log(`[publish][roll] ${roll} student rows found=${svals.length}`);
+        if (svals.length <= 1) {
+          console.log(`[publish][roll][skip] ${roll} no student rows in sheet`);
+          continue;
+        }
 
-      row[pIdx.roll] = roll;
-      row[pIdx.student_name] = student[sIdx.name];
-      row[pIdx.branch] = student[sIdx.branch];
-      row[pIdx.cgpa] = student[sIdx.cgpa];
+        const sheader = svals[0].map((h) => String(h || "").trim());
+        const rollIdx = sheader.findIndex((h) => /roll/i.test(h));
+        const nameIdx = sheader.findIndex((h) => /name/i.test(h));
+        const programIdx = sheader.findIndex((h) => /program|degree/i.test(h));
+        const cgpaIdx = sheader.findIndex((h) => /cgpa/i.test(h));
 
-      row[pIdx.result] = "SELECTED";
-      row[pIdx.published_at] = now;
+        const studentRow = svals.slice(1).find((r) => (r[rollIdx] || "").toString().trim() === roll.toString().trim());
+        if (!studentRow) {
+          console.log(`[publish][roll][skip] ${roll} student not found in sheet`);
+          continue;
+        }
 
-      await appendRow("Placement_Data", row);
+        const studentName = studentRow[nameIdx] || "";
+        const studentBranch = studentRow[programIdx] || parsed.branchCode;
+        const studentCgpa = studentRow[cgpaIdx] || "";
+        const program = studentRow[programIdx] || degreeType;
+
+        console.log(`[publish][roll] ${roll} found student name=${studentName} branch=${studentBranch} cgpa=${studentCgpa}`);
+
+        const prow = Array(pHeader.length).fill("");
+        prow[pIdx.request_id] = request_id;
+        prow[pIdx.company] = driveRow[dIdx.company];
+        prow[pIdx.drive_type] = driveRow[dIdx.type];
+        prow[pIdx.eligible_pool] = driveRow[dIdx.eligible_pool];
+        prow[pIdx.internship_stipend] = driveRow[dIdx.internship_stipend];
+        prow[pIdx.fte_ctc] = driveRow[dIdx.fte_ctc];
+        prow[pIdx.fte_base] = driveRow[dIdx.fte_base];
+        prow[pIdx.roll] = roll;
+        prow[pIdx.student_name] = studentName;
+        prow[pIdx.branch] = studentBranch;
+        prow[pIdx.cgpa] = studentCgpa;
+        prow[pIdx.result] = "SELECTED";
+        prow[pIdx.published_at] = now;
+
+        try {
+          await appendRow("Placement_Data", prow);
+          console.log(`[publish][roll] ${roll} appended to Placement_Data (central workbook)`);
+        } catch (err) {
+          console.warn(`[publish][roll][error] Failed to append to Placement_Data:`, err.message || err);
+        }
+
+        try {
+          const { spreadsheetId: placementId, workbookName } = await ensurePlacementSheets({ program, branch: parsed.branchCode });
+          const offersSheet = `Offers_${parsed.branchCode}`;
+          const offerRow = [roll, driveRow[dIdx.company], driveRow[dIdx.type], driveRow[dIdx.fte_ctc] || "", "SELECTED"];
+          const placementSheetsApi = await getSheets();
+          console.log(`[placement] Attempting to append offer for roll ${roll} to workbook '${workbookName}' (ID: ${placementId}), sheet '${offersSheet}'`);
+          await placementSheetsApi.spreadsheets.values.append({
+            spreadsheetId: placementId,
+            range: `${offersSheet}!A1`,
+            valueInputOption: "RAW",
+            requestBody: { values: [offerRow] },
+          });
+          console.log(`[placement] Successfully appended offer for roll ${roll} to workbook '${workbookName}', sheet '${offersSheet}'`);
+        } catch (err) {
+          console.warn(`[placement][error] Failed to append offer for roll ${roll}:`, err.message || err);
+        }
+      } catch (err) {
+        console.warn(`[publish][roll][error] Failed to process roll ${roll}:`, err.message || err);
+      }
     }
 
     // ---------- LOCK DRIVE ----------

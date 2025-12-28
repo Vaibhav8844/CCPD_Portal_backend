@@ -29,4 +29,11 @@ export const users = [
     passwordHash: bcrypt.hashSync("data123", 10),
     role: "DATA_TEAM",
   },
+  {
+    id: "5",
+    name: "Vaibhav Prasad",
+    username: "vj22ecb0b31@student.nitw.ac.in",
+    passwordHash: bcrypt.hashSync("vaibhav123", 10),
+    role: "CALENDAR_TEAM",
+  },
 ];

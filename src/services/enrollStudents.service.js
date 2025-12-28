@@ -4,19 +4,20 @@ import {
   ensureBranchSheet,
   appendStudents,
 } from "../utils/studentWorkbook.js";
+import { getAcademicYear } from "../config/academicYear.js";
 
 export async function enrollStudents({
   fileBuffer,
-  year,
   branch,
   degreeType,
   program,
 }) {
   const records = parseStudentsExcel(fileBuffer);
 
-  const spreadsheetId =
-    await getOrCreateStudentWorkbook(year, degreeType);
+  // Always use admin-set academic year for file naming
+  const academicYear = getAcademicYear();
 
+  const spreadsheetId = await getOrCreateStudentWorkbook(academicYear, degreeType);
   await ensureBranchSheet(spreadsheetId, branch);
 
   const rows = records.map((r) => [
@@ -38,7 +39,7 @@ export async function enrollStudents({
 
   return {
     inserted: rows.length,
-    workbook: `${degreeType}_Students_${year}`,
+    workbook: `${degreeType}_Students_${academicYear}`,
     sheet: branch,
   };
 }

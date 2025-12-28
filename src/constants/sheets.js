@@ -1,6 +1,7 @@
 export const DRIVE_REQUEST_HEADERS = [
   "Request ID",
   "Company",
+  "SPOC",
   "Type",
   "Eligible Pool",
   "CGPA Cutoff",
@@ -23,6 +24,7 @@ export const DRIVE_REQUEST_HEADERS = [
 
 export const COMPANY_DRIVES_HEADERS = [
   "Company",
+  "SPOC",
   "Request ID",
   "Type",
   "Eligible Pool",

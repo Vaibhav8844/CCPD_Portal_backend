@@ -19,7 +19,7 @@ function median(arr) {
 /* --------- MAIN ANALYTICS --------- */
 
 export async function getPlacementOverview({ spreadsheetId }) {
-  const sheets = getSheets();
+  const sheets = await getSheets();
 
   /* 1️⃣ Get sheet metadata */
   const meta = await sheets.spreadsheets.get({ spreadsheetId });

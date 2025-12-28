@@ -67,3 +67,7 @@ token.json
 # ================================
 *.bak
 *.tmp
+
+tokens/
+*.json
+.env

@@ -1,15 +1,19 @@
 import { getSheets, getDrive } from "../sheets/sheets.dynamic.js";
 import { SHEET_TEMPLATES } from "../constants/sheets.js";
+import { getAcademicYear } from "../config/academicYear.js";
 
-export async function ensurePlacementSheets({ year, program, branch }) {
-  const sheets = getSheets();
-  const drive = getDrive();
+export async function ensurePlacementSheets({ program, branch }) {
+  const sheets = await getSheets();
+  const drive = await getDrive();
 
-  const workbookName = `Placement_Data_${year}_${program}`;
-  const branchCode = branch.toUpperCase();
+  // Use academic year from config
+  const academicYear = getAcademicYear();
+  const workbookName = `Placement_Data_${academicYear}_${program}`;
+  const branchCode = String(branch || "").toUpperCase();
 
   const spreadsheetId = await getOrCreateWorkbook(drive, workbookName);
 
+  console.log(`[placement] ensurePlacementSheets: Using workbook '${workbookName}' (ID: ${spreadsheetId}) for branch '${branchCode}'`);
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
   const existingSheets = meta.data.sheets.map(
     (s) => s.properties.title
@@ -25,12 +29,15 @@ export async function ensurePlacementSheets({ year, program, branch }) {
 
   for (const sheet of requiredSheets) {
     if (!existingSheets.includes(sheet.name)) {
+      console.log(`[placement] Creating missing sheet '${sheet.name}' in workbook '${workbookName}'`);
       await createSheetWithHeader(
         sheets,
         spreadsheetId,
         sheet.name,
         sheet.headers
       );
+    } else {
+      console.log(`[placement] Sheet '${sheet.name}' already exists in workbook '${workbookName}'`);
     }
   }
 

@@ -2,11 +2,11 @@ import { getSheets, getDrive } from "../sheets/sheets.dynamic.js";
 import { STUDENT_HEADERS } from "../constants/studentHeaders.js";
 
 /**
- * Get or create UG_Students_<YEAR> or PG_Students_<YEAR>
+ * Get or create UG_Students_<ACADEMIC_YEAR> or PG_Students_<ACADEMIC_YEAR>
  */
-export async function getOrCreateStudentWorkbook(year, degreeType) {
-  const drive = getDrive();
-  const name = `${degreeType}_Students_${year}`;
+export async function getOrCreateStudentWorkbook(academicYear, degreeType) {
+  const drive = await getDrive();
+  const name = `${degreeType}_Students_${academicYear}`;
 
   const res = await drive.files.list({
     q: `name='${name}' and mimeType='application/vnd.google-apps.spreadsheet'`,
@@ -31,7 +31,7 @@ export async function getOrCreateStudentWorkbook(year, degreeType) {
  * Ensure branch sheet exists with headers
  */
 export async function ensureBranchSheet(spreadsheetId, branch) {
-  const sheets = getSheets();
+  const sheets = await getSheets();
   const meta = await sheets.spreadsheets.get({ spreadsheetId });
 
   const exists = meta.data.sheets.some(
@@ -68,7 +68,7 @@ export async function ensureBranchSheet(spreadsheetId, branch) {
  * Append students to branch sheet
  */
 export async function appendStudents(spreadsheetId, branch, rows) {
-  const sheets = getSheets();
+  const sheets = await getSheets();
 
   await sheets.spreadsheets.values.append({
     spreadsheetId,
