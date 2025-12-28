@@ -1,58 +1,5 @@
 import { getSheets, getDrive } from "../sheets/sheets.dynamic.js";
 import { getAcademicYear } from "../config/academicYear.js";
-import { getOrCreateStudentWorkbook } from "../utils/studentWorkbook.js";
-
-/**
- * Helper: Get student data from workbook
- * STUDENT_HEADERS: Roll No.(0), Student Name(1), Gender(2), Phone No.(3), Institute Email(4), Personal Email(5), Department(6), Degree Type(7), Program(8), CGPA(9), Session(10), Semester/Quarter(11)
- */
-async function getStudentData(degreeType) {
-  const academicYear = getAcademicYear();
-  const sheets = await getSheets();
-  
-  try {
-    const workbookId = await getOrCreateStudentWorkbook(academicYear, degreeType);
-    
-    const meta = await sheets.spreadsheets.get({ spreadsheetId: workbookId });
-    const branches = meta.data.sheets
-      .map(s => s.properties.title)
-      .filter(name => !name.startsWith("Sheet"));
-    
-    const students = [];
-    
-    for (const branch of branches) {
-      try {
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: workbookId,
-          range: `${branch}!A2:Z`,
-        });
-        
-        const rows = result.data.values || [];
-        for (const row of rows) {
-          if (row[0]) { // Has roll number
-            students.push({
-              rollNo: row[0],
-              name: row[1],
-              branch,
-              degreeType,
-              gender: row[2],
-              phone: row[3],
-              email: row[4] || row[5],
-              cgpa: parseFloat(row[9]) || 0,
-            });
-          }
-        }
-      } catch (err) {
-        console.error(`Error reading branch ${branch}:`, err.message);
-      }
-    }
-    
-    return students;
-  } catch (err) {
-    console.error(`[getStudentData] Error for ${degreeType}:`, err.message);
-    return [];
-  }
-}
 
 /**
  * Helper: Get placement data from Offers sheets
@@ -274,14 +221,6 @@ export async function getBranchwiseStats(degreeType = "UG") {
           }
         }
         
-        console.log(`[DEBUG] ${sheetName} raw data:`, {
-          medianCTC: statsMap["Median CTC (LPA)"],
-          avgCTC: statsMap["Average CTC (LPA)"],
-          totalStudents: statsMap["Total Students"],
-          maleStudents: statsMap["Total M Students"],
-          placed: statsMap["Total Placed"]
-        });
-        
         const branch = sheetName.replace("Placement_Stats_", "");
         
         // Helper function to parse numeric values from sheets
@@ -337,71 +276,6 @@ export async function getBranchwiseStats(degreeType = "UG") {
     console.error("[stats] getBranchwiseStats error:", err);
     throw err;
   }
-}
-
-/**
- * Fallback: Calculate branch-wise stats from raw data
- */
-async function calculateBranchwiseStats(degreeType) {
-  const [students, placements] = await Promise.all([
-    getStudentData(degreeType),
-    getPlacementData(degreeType),
-  ]);
-  
-  // Group students by branch
-  const branchMap = new Map();
-  
-  for (const student of students) {
-    if (!branchMap.has(student.branch)) {
-      branchMap.set(student.branch, {
-        branch: student.branch,
-        degreeType,
-        totalStudents: 0,
-        eligibleStudents: 0,
-        placed: 0,
-        offers: [],
-      });
-    }
-    
-    const branchData = branchMap.get(student.branch);
-    branchData.totalStudents++;
-    if (student.cgpa >= 6.5) {
-      branchData.eligibleStudents++;
-    }
-  }
-  
-  // Add placement data
-  for (const placement of placements) {
-    if (branchMap.has(placement.branch)) {
-      branchMap.get(placement.branch).offers.push(placement);
-    }
-  }
-  
-  // Calculate stats for each branch
-  const branchStats = [];
-  for (const [branch, data] of branchMap.entries()) {
-    const placedRollNos = new Set(data.offers.map(o => o.rollNo));
-    const placed = placedRollNos.size;
-    const ctcValues = data.offers.map(o => o.ctc).filter(c => c > 0);
-    
-    branchStats.push({
-      branch,
-      degreeType,
-      totalStudents: data.totalStudents,
-      eligibleStudents: data.eligibleStudents,
-      placed,
-      placementPercentage: data.eligibleStudents > 0
-        ? ((placed / data.eligibleStudents) * 100).toFixed(2)
-        : 0,
-      averageCTC: ctcValues.length > 0
-        ? (ctcValues.reduce((sum, c) => sum + c, 0) / ctcValues.length).toFixed(2)
-        : 0,
-      highestCTC: ctcValues.length > 0 ? Math.max(...ctcValues).toFixed(2) : 0,
-      offersReceived: data.offers.length,
-    });
-  }
-
-  return branchStats.sort((a, b) => a.branch.localeCompare(b.branch));
 }
 
 /**
