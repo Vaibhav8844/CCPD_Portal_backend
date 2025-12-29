@@ -73,6 +73,12 @@ const stateFile = path.resolve(process.cwd(), "data", "calendar_state.json");
 
 // Return the calendar workbook id if initialized, otherwise null.
 async function getSpreadsheetId() {
+  // Priority 1: Use environment variable (for production)
+  if (process.env.CALENDAR_WORKBOOK_ID) {
+    return process.env.CALENDAR_WORKBOOK_ID;
+  }
+  
+  // Priority 2: Use state file (for development)
   try {
     const raw = await fsp.readFile(stateFile, "utf8");
     const state = JSON.parse(raw);
