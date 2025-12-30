@@ -201,74 +201,79 @@ export async function getBranchwiseStats(degreeType = "UG") {
       return [];
     }
     
+    // Fetch all stats sheets in parallel
+    const fetchPromises = statsSheets.map(sheetName =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId: workbookId,
+        range: `${sheetName}!A2:B27`,
+      }).then(result => ({ sheetName, rows: result.data.values || [] }))
+        .catch(err => {
+          console.error(`[getBranchwiseStats] Error reading ${sheetName}:`, err);
+          return { sheetName, rows: [] };
+        })
+    );
+    
+    const fetchedSheets = await Promise.all(fetchPromises);
+    
     const branchStats = [];
     
-    for (const sheetName of statsSheets) {
-      try {
-        // Read the Placement_Stats sheet (key-value pairs in columns A and B, rows 2-27)
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: workbookId,
-          range: `${sheetName}!A2:B27`,
-        });
-        
-        const rows = result.data.values || [];
-        const statsMap = {};
-        
-        // Parse key-value pairs
-        for (const row of rows) {
-          if (row[0] && row[1] !== undefined) {
-            statsMap[row[0]] = row[1];
-          }
+    for (const { sheetName, rows } of fetchedSheets) {
+      if (rows.length === 0) continue;
+      
+      const statsMap = {};
+      
+      // Parse key-value pairs
+      for (const row of rows) {
+        if (row[0] && row[1] !== undefined) {
+          statsMap[row[0]] = row[1];
         }
-        
-        const branch = sheetName.replace("Placement_Stats_", "");
-        
-        // Helper function to parse numeric values from sheets
-        const parseNumeric = (value) => {
-          if (value === undefined || value === null || value === "") return 0;
-          const parsed = parseFloat(String(value).replace(/,/g, ''));
-          return isNaN(parsed) ? 0 : parsed;
-        };
-        
-        const parseInteger = (value) => {
-          if (value === undefined || value === null || value === "") return 0;
-          const parsed = Number(String(value).replace(/,/g, ''));
-          return isNaN(parsed) ? 0 : Math.floor(parsed);
-        };
-        
-        branchStats.push({
-          branch,
-          degreeType,
-          totalStudents: parseInteger(statsMap["Total Students"]),
-          maleStudents: parseInteger(statsMap["Total M Students"]),
-          femaleStudents: parseInteger(statsMap["Total F Students"]),
-          eligibleStudents: parseInteger(statsMap["Total Eligible"]),
-          maleEligible: parseInteger(statsMap["Total M Eligible"]),
-          femaleEligible: parseInteger(statsMap["Total F Eligible"]),
-          placed: parseInteger(statsMap["Total Placed"]),
-          malePlaced: parseInteger(statsMap["No of M Placed"]),
-          femalePlaced: parseInteger(statsMap["No of F Placed"]),
-          placementPercentageOfTotal: parseNumeric(statsMap["% Students Placed (of Total)"]),
-          placementPercentage: parseNumeric(statsMap["% Students Placed (of Eligible)"]),
-          malePlacedPercentageOfTotal: parseNumeric(statsMap["% M Placed (of Total)"]),
-          malePlacedPercentageOfEligible: parseNumeric(statsMap["% M Placed (of Eligible)"]),
-          femalePlacedPercentageOfTotal: parseNumeric(statsMap["% F Placed (of Total)"]),
-          femalePlacedPercentageOfEligible: parseNumeric(statsMap["% F Placed (of Eligible)"]),
-          highestCTC: parseNumeric(statsMap["Highest CTC (LPA)"]),
-          averageCTC: parseNumeric(statsMap["Average CTC (LPA)"]),
-          lowestCTC: parseNumeric(statsMap["Lowest CTC (LPA)"]),
-          medianCTC: parseNumeric(statsMap["Median CTC (LPA)"]),
-          onlyInternship: parseInteger(statsMap["Only Internship Offers"]),
-          onlyFTE: parseInteger(statsMap["Only FTE Offers"]),
-          bothOffers: parseInteger(statsMap["Both Offers"]),
-          unplacedCGPA8Plus: parseInteger(statsMap["Unplaced (CGPA >= 8)"]),
-          unplacedCGPA7_5Plus: parseInteger(statsMap["Unplaced (CGPA >= 7.5)"]),
-          unplacedCGPA7Plus: parseInteger(statsMap["Unplaced (CGPA >= 7)"]),
-          unplacedCGPA6_5Plus: parseInteger(statsMap["Unplaced (CGPA >= 6.5)"]),
-        });
-      } catch (err) {
-        console.error(`[getBranchwiseStats] Error reading ${sheetName}:`, err);
       }
+      
+      const branch = sheetName.replace("Placement_Stats_", "");
+      
+      // Helper function to parse numeric values from sheets
+      const parseNumeric = (value) => {
+        if (value === undefined || value === null || value === "") return 0;
+        const parsed = parseFloat(String(value).replace(/,/g, ''));
+        return isNaN(parsed) ? 0 : parsed;
+      };
+      
+      const parseInteger = (value) => {
+        if (value === undefined || value === null || value === "") return 0;
+        const parsed = Number(String(value).replace(/,/g, ''));
+        return isNaN(parsed) ? 0 : Math.floor(parsed);
+      };
+      
+      branchStats.push({
+        branch,
+        degreeType,
+        totalStudents: parseInteger(statsMap["Total Students"]),
+        maleStudents: parseInteger(statsMap["Total M Students"]),
+        femaleStudents: parseInteger(statsMap["Total F Students"]),
+        eligibleStudents: parseInteger(statsMap["Total Eligible"]),
+        maleEligible: parseInteger(statsMap["Total M Eligible"]),
+        femaleEligible: parseInteger(statsMap["Total F Eligible"]),
+        placed: parseInteger(statsMap["Total Placed"]),
+        malePlaced: parseInteger(statsMap["No of M Placed"]),
+        femalePlaced: parseInteger(statsMap["No of F Placed"]),
+        placementPercentageOfTotal: parseNumeric(statsMap["% Students Placed (of Total)"]),
+        placementPercentage: parseNumeric(statsMap["% Students Placed (of Eligible)"]),
+        malePlacedPercentageOfTotal: parseNumeric(statsMap["% M Placed (of Total)"]),
+        malePlacedPercentageOfEligible: parseNumeric(statsMap["% M Placed (of Eligible)"]),
+        femalePlacedPercentageOfTotal: parseNumeric(statsMap["% F Placed (of Total)"]),
+        femalePlacedPercentageOfEligible: parseNumeric(statsMap["% F Placed (of Eligible)"]),
+        highestCTC: parseNumeric(statsMap["Highest CTC (LPA)"]),
+        averageCTC: parseNumeric(statsMap["Average CTC (LPA)"]),
+        lowestCTC: parseNumeric(statsMap["Lowest CTC (LPA)"]),
+        medianCTC: parseNumeric(statsMap["Median CTC (LPA)"]),
+        onlyInternship: parseInteger(statsMap["Only Internship Offers"]),
+        onlyFTE: parseInteger(statsMap["Only FTE Offers"]),
+        bothOffers: parseInteger(statsMap["Both Offers"]),
+        unplacedCGPA8Plus: parseInteger(statsMap["Unplaced (CGPA >= 8)"]),
+        unplacedCGPA7_5Plus: parseInteger(statsMap["Unplaced (CGPA >= 7.5)"]),
+        unplacedCGPA7Plus: parseInteger(statsMap["Unplaced (CGPA >= 7)"]),
+        unplacedCGPA6_5Plus: parseInteger(statsMap["Unplaced (CGPA >= 6.5)"]),
+      });
     }
 
     return branchStats.sort((a, b) => a.branch.localeCompare(b.branch));
@@ -307,32 +312,34 @@ export async function getCTCDistribution() {
       .map(s => s.properties.title)
       .filter(name => name.startsWith("CTC_Distribution_"));
     
-    // Aggregate data from all branches
+    // Aggregate data from all branches in parallel
     const rangeMap = new Map();
     
-    for (const sheetName of ctcSheets) {
-      try {
-        const result = await sheets.spreadsheets.values.get({
-          spreadsheetId: workbookId,
-          range: `${sheetName}!A2:B7`, // 6 ranges: 0-5, 5-10, 10-15, 15-20, 20-30, 30+
-        });
+    const fetchPromises = ctcSheets.map(sheetName =>
+      sheets.spreadsheets.values.get({
+        spreadsheetId: workbookId,
+        range: `${sheetName}!A2:B7`, // 6 ranges: 0-5, 5-10, 10-15, 15-20, 20-30, 30+
+      }).then(result => ({ sheetName, rows: result.data.values || [] }))
+        .catch(err => {
+          console.error(`[getCTCDistribution] Error reading ${sheetName}:`, err);
+          return { sheetName, rows: [] };
+        })
+    );
+    
+    const fetchedSheets = await Promise.all(fetchPromises);
+    
+    for (const { rows } of fetchedSheets) {
+      for (const row of rows) {
+        if (!row[0]) continue;
         
-        const rows = result.data.values || [];
+        const range = row[0];
+        const count = parseInt(row[1]) || 0;
         
-        for (const row of rows) {
-          if (!row[0]) continue;
-          
-          const range = row[0];
-          const count = parseInt(row[1]) || 0;
-          
-          if (rangeMap.has(range)) {
-            rangeMap.set(range, rangeMap.get(range) + count);
-          } else {
-            rangeMap.set(range, count);
-          }
+        if (rangeMap.has(range)) {
+          rangeMap.set(range, rangeMap.get(range) + count);
+        } else {
+          rangeMap.set(range, count);
         }
-      } catch (err) {
-        console.error(`[getCTCDistribution] Error reading ${sheetName}:`, err);
       }
     }
     

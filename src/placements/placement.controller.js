@@ -1,10 +1,10 @@
 // src/placements/placement.controller.js
-import { getSheet } from "../sheets/sheets.client.js";
+import { getSheetCached } from "../sheets/sheets.client.js";
 import { idxOf } from "../utils/sheetUtils.js";
 import { ensurePlacementSheets } from "../utils/placementWorkbook.js";
 
 export async function getCalendarData(req, res) {
-  const rows = await getSheet("Company_Drives");
+  const rows = await getSheetCached("Company_Drives", true); // Use cache
   const header = rows[0];
 
   const idx = {
@@ -44,25 +44,39 @@ export async function enrollBatch(req, res) {
   }
 
   try {
-    const results = [];
+    // Process all branches in parallel for faster enrollment
+    const results = await Promise.all(
+      branches.map(async (branch) => {
+        try {
+          const result = await ensurePlacementSheets({
+            year,
+            program,
+            branch,
+          });
+          return {
+            branch,
+            workbook: result.workbookName,
+            success: true,
+          };
+        } catch (err) {
+          console.error(`Failed to enroll ${branch}:`, err);
+          return {
+            branch,
+            success: false,
+            error: err.message,
+          };
+        }
+      })
+    );
 
-    for (const branch of branches) {
-      const result = await ensurePlacementSheets({
-        year,
-        program,
-        branch,
-      });
-
-      results.push({
-        branch,
-        workbook: result.workbookName,
-      });
-    }
+    const successful = results.filter(r => r.success);
+    const failed = results.filter(r => !r.success);
 
     res.json({
-      success: true,
-      message: "Batch enrolled successfully",
-      data: results,
+      success: failed.length === 0,
+      message: `Enrolled ${successful.length} branches${failed.length > 0 ? `, ${failed.length} failed` : ''}`,
+      data: successful.map(r => ({ branch: r.branch, workbook: r.workbook })),
+      errors: failed.map(r => ({ branch: r.branch, error: r.error })),
     });
   } catch (err) {
     console.error("Enroll batch failed:", err);

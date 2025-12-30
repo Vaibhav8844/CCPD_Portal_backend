@@ -163,8 +163,10 @@ router.post(
         errors: [],
       };
 
-      // Recalculate for both UG and PG
-      for (const degreeType of ["UG", "PG"]) {
+      // Process both UG and PG in parallel
+      const degreeTypes = ["UG", "PG"];
+      
+      const workbookPromises = degreeTypes.map(async (degreeType) => {
         const workbookName = `Placement_Data_${academicYear}_${degreeType}`;
         
         const res = await drive.files.list({
@@ -174,7 +176,7 @@ router.post(
 
         if (res.data.files.length === 0) {
           console.log(`[recalculate] No workbook found: ${workbookName}`);
-          continue;
+          return [];
         }
 
         const workbookId = res.data.files[0].id;
@@ -185,21 +187,33 @@ router.post(
           .map(s => s.properties.title)
           .filter(name => name.startsWith("Students_"));
 
-        for (const sheetName of studentSheets) {
+        // Process all branches in parallel
+        const branchPromises = studentSheets.map(async (sheetName) => {
           const branchCode = sheetName.replace("Students_", "");
           
           try {
             await recalculateBranchStats(workbookId, branchCode, degreeType, academicYear);
-            results.recalculated.push(`${degreeType} - ${branchCode}`);
+            return { success: true, branch: `${degreeType} - ${branchCode}` };
           } catch (err) {
             console.error(`[recalculate] Error for ${degreeType}-${branchCode}:`, err.message);
-            results.errors.push({
+            return { 
+              success: false, 
               branch: `${degreeType} - ${branchCode}`,
-              error: err.message,
-            });
+              error: err.message 
+            };
           }
-        }
-      }
+        });
+
+        return Promise.all(branchPromises);
+      });
+
+      const allResults = (await Promise.all(workbookPromises)).flat();
+      
+      results.recalculated = allResults.filter(r => r.success).map(r => r.branch);
+      results.errors = allResults.filter(r => !r.success).map(r => ({
+        branch: r.branch,
+        error: r.error
+      }));
 
       res.json({
         success: true,

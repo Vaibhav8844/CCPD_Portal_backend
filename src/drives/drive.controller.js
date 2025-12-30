@@ -6,6 +6,9 @@ import {
   appendRow,
   updateCell,
   updateRow,
+  batchUpdateCells,
+  getSheetCached,
+  invalidateCache,
 } from "../sheets/sheets.client.js";
 import { getSheets } from "../sheets/sheets.dynamic.js";
 import { ensurePlacementSheets } from "../utils/placementWorkbook.js";
@@ -134,6 +137,9 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
   /* ---------- UPDATE EXISTING ---------- */
   const row = rowIndex + 1;
 
+  // Collect all updates to batch them
+  const cellUpdates = [];
+
   // ---- NON-DATE FIELDS ----
   const baseUpdates = [
     [idx.type, type],
@@ -147,7 +153,7 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
   
   for (const [col, val] of baseUpdates) {
     if (hasValue(val)) {
-      await updateCell("Drive_Requests", row, col, val);
+      cellUpdates.push({ row, col, value: val });
     }
   }
 
@@ -162,9 +168,9 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
     const prevStatus = rows[rowIndex][idx.ppt_status];
 
     if (ppt_datetime !== prevDate) {
-      await updateCell("Drive_Requests", row, idx.ppt_dt, ppt_datetime);
+      cellUpdates.push({ row, col: idx.ppt_dt, value: ppt_datetime });
       if (prevStatus !== "APPROVED") {
-        await updateCell("Drive_Requests", row, idx.ppt_status, "PENDING");
+        cellUpdates.push({ row, col: idx.ppt_status, value: "PENDING" });
       }
     }
   }
@@ -175,9 +181,9 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
     const prevStatus = rows[rowIndex][idx.ot_status];
 
     if (ot_datetime !== prevDate) {
-      await updateCell("Drive_Requests", row, idx.ot_dt, ot_datetime);
+      cellUpdates.push({ row, col: idx.ot_dt, value: ot_datetime });
       if (prevStatus !== "APPROVED") {
-        await updateCell("Drive_Requests", row, idx.ot_status, "PENDING");
+        cellUpdates.push({ row, col: idx.ot_status, value: "PENDING" });
       }
     }
   }
@@ -187,21 +193,17 @@ router.post("/request", authenticate, roleGuard("SPOC"), async (req, res) => {
     const prevDate = rows[rowIndex][idx.interview_dt];
     const prevStatus = rows[rowIndex][idx.interview_status];
     if (interview_datetime !== prevDate) {
-      await updateCell(
-        "Drive_Requests",
-        row,
-        idx.interview_dt,
-        interview_datetime
-      );
+      cellUpdates.push({ row, col: idx.interview_dt, value: interview_datetime });
       if (prevStatus !== "APPROVED") {
-        await updateCell(
-          "Drive_Requests",
-          row,
-          idx.interview_status,
-          "PENDING"
-        );
+        cellUpdates.push({ row, col: idx.interview_status, value: "PENDING" });
       }
     }
+  }
+
+  // Apply all updates in one batch operation
+  if (cellUpdates.length > 0) {
+    await batchUpdateCells("Drive_Requests", cellUpdates);
+    invalidateCache("Drive_Requests");
   }
 
   res.json({ request_id });
@@ -215,7 +217,7 @@ router.get(
   authenticate,
   roleGuard("CALENDAR_TEAM"),
   async (req, res) => {
-    const rows = await getSheet("Drive_Requests");
+    const rows = await getSheetCached("Drive_Requests", true); // Use cache
     const header = rows[0];
     const idx = (c) => idxOf(header, c);
 
@@ -283,6 +285,8 @@ router.post(
     const statusColumn = `${slot} Status`;
     const suggestColumn = `${slot} Suggested Datetime`;
 
+    const cellUpdates = [];
+
     /* ================= APPROVE ================= */
     if (action === "APPROVE") {
       const dateCol = dateColumnMap[slot];
@@ -297,24 +301,24 @@ router.post(
         });
       }
 
-      await updateCell("Drive_Requests", row, col(statusColumn), "APPROVED");
+      cellUpdates.push({ row, col: col(statusColumn), value: "APPROVED" });
     }
 
     /* ================= REJECT ================= */
     if (action === "REJECT") {
-      await updateCell("Drive_Requests", row, col(statusColumn), "REJECTED");
+      cellUpdates.push({ row, col: col(statusColumn), value: "REJECTED" });
     }
 
     /* ================= SUGGEST ================= */
     if (action === "SUGGEST") {
-      await updateCell("Drive_Requests", row, col(statusColumn), "SUGGESTED");
+      cellUpdates.push({ row, col: col(statusColumn), value: "SUGGESTED" });
+      cellUpdates.push({ row, col: col(suggestColumn), value: suggested_datetime });
+    }
 
-      await updateCell(
-        "Drive_Requests",
-        row,
-        col(suggestColumn),
-        suggested_datetime
-      );
+    // Batch update all changes
+    if (cellUpdates.length > 0) {
+      await batchUpdateCells("Drive_Requests", cellUpdates);
+      invalidateCache("Drive_Requests");
     }
 
     res.json({ success: true });
@@ -326,7 +330,7 @@ router.get(
   authenticate,
   roleGuard("SPOC", "CALENDAR_TEAM", "DATA_TEAM", "ADMIN"),
   async (req, res) => {
-    const rows = await getSheet("Drive_Requests");
+    const rows = await getSheetCached("Drive_Requests", true); // Use cache
     const header = rows[0];
 
     const idx = {
@@ -395,7 +399,7 @@ router.get(
   authenticate,
   roleGuard("CALENDAR_TEAM", "ADMIN"),
   async (req, res) => {
-    const rows = await getSheet("Drive_Requests");
+    const rows = await getSheetCached("Drive_Requests", true); // Use cache
     const header = rows[0];
 
     const idx = {
@@ -506,14 +510,9 @@ router.post(
 
     console.log(`[publish] Added: ${addedRollNumbers.length}, Removed: ${removedRollNumbers.length}`);
 
-    // ---------- LOAD SHEETS ----------
+    // ---------- LOAD ONLY DRIVE REQUESTS SHEET ----------
     const driveRows = await getSheet("Drive_Requests");
-    const studentRows = await getSheet("Students_Data");
-    const placementRows = await getSheet("Placement_Data");
-
     const dHeader = driveRows[0];
-    const sHeader = studentRows[0];
-    const pHeader = placementRows[0];
 
     // ---------- INDEX MAPS ----------
     const dIdx = {
@@ -536,29 +535,6 @@ router.post(
       drive_status: idxOf(dHeader, "Drive Status"),
     };
 
-    const sIdx = {
-      roll: idxOf(sHeader, "Roll Number"),
-      name: idxOf(sHeader, "Student Name"),
-      branch: idxOf(sHeader, "Branch"),
-      cgpa: idxOf(sHeader, "CGPA"),
-    };
-
-    const pIdx = {
-      request_id: idxOf(pHeader, "Request ID"),
-      company: idxOf(pHeader, "Company"),
-      drive_type: idxOf(pHeader, "Drive Type"),
-      eligible_pool: idxOf(pHeader, "Eligible Pool"),
-      internship_stipend: idxOf(pHeader, "Internship Stipend"),
-      fte_ctc: idxOf(pHeader, "FTE CTC"),
-      fte_base: idxOf(pHeader, "FTE Base"),
-      roll: idxOf(pHeader, "Roll Number"),
-      student_name: idxOf(pHeader, "Student Name"),
-      branch: idxOf(pHeader, "Branch"),
-      cgpa: idxOf(pHeader, "CGPA"),
-      result: idxOf(pHeader, "Result"),
-      published_at: idxOf(pHeader, "Published At"),
-    };
-
     // ---------- FIND DRIVE ----------
     const driveRow = driveRows.find(
       (r, i) => i > 0 && r[dIdx.request_id] === request_id
@@ -568,9 +544,8 @@ router.post(
       return res.status(404).json({ message: "Drive not found" });
     }
 
-    console.log(`[publish] loading drive/student/placement sheets`);
+    console.log(`[publish] Processing ${addedRollNumbers.length} additions and ${removedRollNumbers.length} removals`);
 
-    // ---------- APPEND RESULTS (per-roll lookup in per-year student workbook) ----------
     const now = new Date().toISOString();
 
     function parseRoll(roll) {
@@ -582,8 +557,8 @@ router.post(
       return { year, branchCode: (branchCode || "").toUpperCase(), degreeChar: (degreeChar || "").toUpperCase() };
     }
 
-    // ---------- PROCESS ADDED STUDENTS ----------
-    for (const roll of addedRollNumbers) {
+    // ---------- PROCESS ADDED STUDENTS IN PARALLEL ----------
+    const processAddedStudent = async (roll) => {
       console.log(`[publish][roll] request_id=${request_id} roll=${roll} - parsing`);
       const parsed = parseRoll(roll);
       try {
@@ -608,7 +583,7 @@ router.post(
         
         if (svals.length <= 1) {
           console.log(`[publish][roll][skip] ${roll} no students in ${studentsSheetName}`);
-          continue;
+          return { success: false, roll };
         }
 
         const sheader = svals[0].map((h) => String(h || "").trim());
@@ -620,7 +595,7 @@ router.post(
         const studentRow = svals.slice(1).find((r) => (r[rollIdx] || "").toString().trim() === roll.toString().trim());
         if (!studentRow) {
           console.log(`[publish][roll][skip] ${roll} student not found in ${studentsSheetName}`);
-          continue;
+          return { success: false, roll };
         }
 
         const studentName = studentRow[nameIdx] || "";
@@ -629,71 +604,55 @@ router.post(
 
         console.log(`[publish][roll] ${roll} found student name=${studentName} branch=${studentBranch} cgpa=${studentCgpa}`);
 
-        const prow = Array(pHeader.length).fill("");
-        prow[pIdx.request_id] = request_id;
-        prow[pIdx.company] = driveRow[dIdx.company];
-        prow[pIdx.drive_type] = driveRow[dIdx.type];
-        prow[pIdx.eligible_pool] = driveRow[dIdx.eligible_pool];
-        prow[pIdx.internship_stipend] = driveRow[dIdx.internship_stipend];
-        prow[pIdx.fte_ctc] = driveRow[dIdx.fte_ctc];
-        prow[pIdx.fte_base] = driveRow[dIdx.fte_base];
-        prow[pIdx.roll] = roll;
-        prow[pIdx.student_name] = studentName;
-        prow[pIdx.branch] = studentBranch;
-        prow[pIdx.cgpa] = studentCgpa;
-        prow[pIdx.result] = "SELECTED";
-        prow[pIdx.published_at] = now;
-
-        try {
-          await appendRow("Placement_Data", prow);
-          console.log(`[publish][roll] ${roll} appended to Placement_Data (central workbook)`);
-        } catch (err) {
-          console.warn(`[publish][roll][error] Failed to append to Placement_Data:`, err.message || err);
-        }
-
-        try {
-          // Update placement workbook directly (single source of truth)
-          await updatePlacementWorkbook({
-            rollNo: roll,
-            company: driveRow[dIdx.company],
-            branch: parsed.branchCode,
-            degreeType: degreeType,
-            ctc: parseFloat(driveRow[dIdx.fte_ctc]) || 0,
-            offerType: driveRow[dIdx.type] || "FTE",
-            requestId: request_id,
-            driveInfo: {
-              spoc: driveRow[dIdx.spoc],
-              driveType: driveRow[dIdx.type],
-              eligiblePool: driveRow[dIdx.eligible_pool],
-              pptDatetime: driveRow[dIdx.ppt_datetime],
-              otDatetime: driveRow[dIdx.ot_datetime],
-              interviewDatetime: driveRow[dIdx.interview_datetime],
-              pptStatus: driveRow[dIdx.ppt_status],
-              otStatus: driveRow[dIdx.ot_status],
-              interviewStatus: driveRow[dIdx.interview_status],
-              internshipStipend: driveRow[dIdx.internship_stipend],
-              fteCTC: driveRow[dIdx.fte_ctc],
-              fteBase: driveRow[dIdx.fte_base],
-              expectedHires: driveRow[dIdx.expected_hires],
-              driveStatus: driveRow[dIdx.drive_status],
-              resultsPublished: true,
-            },
-          });
-          console.log(`[placement] Updated placement workbook for ${roll}`);
-        } catch (err) {
-          console.warn(`[placement][error] Failed to update placement for roll ${roll}:`, err.message || err);
-        }
+        // Update placement workbook directly (single source of truth)
+        await updatePlacementWorkbook({
+          rollNo: roll,
+          company: driveRow[dIdx.company],
+          branch: parsed.branchCode,
+          degreeType: degreeType,
+          ctc: parseFloat(driveRow[dIdx.fte_ctc]) || 0,
+          offerType: driveRow[dIdx.type] || "FTE",
+          requestId: request_id,
+          driveInfo: {
+            spoc: driveRow[dIdx.spoc],
+            driveType: driveRow[dIdx.type],
+            eligiblePool: driveRow[dIdx.eligible_pool],
+            pptDatetime: driveRow[dIdx.ppt_datetime],
+            otDatetime: driveRow[dIdx.ot_datetime],
+            interviewDatetime: driveRow[dIdx.interview_datetime],
+            pptStatus: driveRow[dIdx.ppt_status],
+            otStatus: driveRow[dIdx.ot_status],
+            interviewStatus: driveRow[dIdx.interview_status],
+            internshipStipend: driveRow[dIdx.internship_stipend],
+            fteCTC: driveRow[dIdx.fte_ctc],
+            fteBase: driveRow[dIdx.fte_base],
+            expectedHires: driveRow[dIdx.expected_hires],
+            driveStatus: driveRow[dIdx.drive_status],
+            resultsPublished: true,
+          },
+        });
+        console.log(`[placement] Updated placement workbook for ${roll}`);
+        return { success: true, roll };
       } catch (err) {
         console.warn(`[publish][roll][error] Failed to process roll ${roll}:`, err.message || err);
+        return { success: false, roll, error: err.message };
       }
+    };
+
+    // Process students in batches of 5 to avoid overwhelming the API
+    const batchSize = 5;
+    const addResults = [];
+    for (let i = 0; i < addedRollNumbers.length; i += batchSize) {
+      const batch = addedRollNumbers.slice(i, i + batchSize);
+      const batchResults = await Promise.all(batch.map(processAddedStudent));
+      addResults.push(...batchResults);
     }
 
-    // ---------- PROCESS REMOVED STUDENTS ----------
-    for (const roll of removedRollNumbers) {
+    // ---------- PROCESS REMOVED STUDENTS IN PARALLEL ----------
+    const processRemovedStudent = async (roll) => {
       console.log(`[publish][remove] Revoking offer for ${roll}`);
       const parsed = parseRoll(roll);
       const degreeType = parsed.degreeChar === "M" ? "PG" : "UG";
-      const academicYear = getAcademicYear();
       
       try {
         // Get placement workbook
@@ -705,10 +664,14 @@ router.post(
         // Revoke offer in Students sheet
         await revokeStudentOffer(placementId, parsed.branchCode, roll);
         console.log(`[publish][remove] Revoked offer for ${roll}`);
+        return { success: true, roll };
       } catch (err) {
         console.warn(`[publish][remove] Failed to revoke for ${roll}:`, err.message);
+        return { success: false, roll, error: err.message };
       }
-    }
+    };
+
+    const removeResults = await Promise.all(removedRollNumbers.map(processRemovedStudent));
 
     // ---------- UPDATE PLACEMENT_RESULTS SHEET ----------
     await updatePlacementResults(request_id, driveRow[dIdx.company], newRollNumbers);
@@ -720,13 +683,19 @@ router.post(
       dIdx.drive_status,
       "Completed"
     );
+    invalidateCache("Drive_Requests");
+
+    const successfulAdds = addResults.filter(r => r.success).length;
+    const successfulRemoves = removeResults.filter(r => r.success).length;
 
     res.json({
       success: true,
       company: driveRow[dIdx.company],
       selected: newRollNumbers.length,
-      added: addedRollNumbers.length,
-      removed: removedRollNumbers.length,
+      added: successfulAdds,
+      removed: successfulRemoves,
+      failedAdds: addResults.filter(r => !r.success).map(r => r.roll),
+      failedRemoves: removeResults.filter(r => !r.success).map(r => r.roll),
     });
   }
 );

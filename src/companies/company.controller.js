@@ -1,7 +1,8 @@
 import express from "express";
 import { authenticate } from "../auth/auth.middleware.js";
 import roleGuard from "../middleware/roleGuard.js";
-import { appendRow, getSheet } from "../sheets/sheets.client.js";
+import { appendRow, getSheet, getSheetCached, invalidateCache } from "../sheets/sheets.client.js";
+import { idxOf } from "../utils/sheetUtils.js";
 
 const router = express.Router();
 
@@ -11,7 +12,7 @@ router.get(
   roleGuard("SPOC", "CALENDAR_TEAM", "DATA_TEAM", "ADMIN"),
   async (req, res) => {
     const username = req.user.username.toLowerCase().trim();
-    const rows = await getSheet("Company_SPOC_Map");
+    const rows = await getSheetCached("Company_SPOC_Map", true); // Enable cache
 
     const companies = rows
       .filter((r, i) => i > 0 && r[1])
@@ -53,6 +54,9 @@ router.post(
       spoc_email.trim(),
     ]);
 
+    // Invalidate cache after modification
+    invalidateCache("Company_SPOC_Map");
+
     res.json({ success: true });
   }
 );
@@ -62,7 +66,7 @@ router.get(
   authenticate,
   roleGuard("SPOC"),
   async (req, res) => {
-    const rows = await getSheet("Company_Drives");
+    const rows = await getSheetCached("Company_Drives", true); // Use cache
     const header = rows[0];
     const idx = (c) => idxOf(header, c);
 

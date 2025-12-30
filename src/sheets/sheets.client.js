@@ -151,6 +151,64 @@ export async function updateRow(sheetName, row, values) {
 }
 
 /**
+ * Batch update multiple cells at once to reduce API calls
+ * @param {string} sheetName - The sheet name
+ * @param {Array<{row: number, col: number, value: any}>} updates - Array of updates
+ */
+export async function batchUpdateCells(sheetName, updates) {
+  if (!updates || updates.length === 0) return;
+  
+  const spreadsheetId = await getSpreadsheetId();
+  if (!spreadsheetId) throw new Error("No calendar workbook initialized. Initialize the calendar first.");
+
+  const sheetsClient = getSheetsClient();
+  const data = updates.map(({ row, col, value }) => ({
+    range: `${sheetName}!${String.fromCharCode(65 + col)}${row}`,
+    values: [[value]],
+  }));
+
+  await sheetsClient.spreadsheets.values.batchUpdate({
+    spreadsheetId,
+    valueInputOption: "RAW",
+    requestBody: { data },
+  });
+}
+
+// Simple in-memory cache for sheet data
+const sheetCache = new Map();
+const CACHE_TTL = 30 * 1000; // 30 seconds
+
+/**
+ * Get sheet with optional caching
+ * @param {string} sheetName - The sheet name
+ * @param {boolean} useCache - Whether to use cache (default: false)
+ */
+export async function getSheetCached(sheetName, useCache = false) {
+  if (useCache) {
+    const cached = sheetCache.get(sheetName);
+    if (cached && Date.now() - cached.timestamp < CACHE_TTL) {
+      return cached.data;
+    }
+  }
+  
+  const data = await getSheet(sheetName);
+  
+  if (useCache) {
+    sheetCache.set(sheetName, { data, timestamp: Date.now() });
+  }
+  
+  return data;
+}
+
+export function invalidateCache(sheetName) {
+  if (sheetName) {
+    sheetCache.delete(sheetName);
+  } else {
+    sheetCache.clear();
+  }
+}
+
+/**
  * Delete the first row in `sheetName` where any cell (trimmed, lowercased)
  * matches the provided `matchValue` (case-insensitive). Does not delete header row.
  */
